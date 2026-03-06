@@ -1,4 +1,4 @@
-# THOUGHTS.md — Sentinel Staking
+# THOUGHTS.md , Sentinel Staking
 ### `NOTE: I have allowed both native ETH and an ERC20 (LPToken) for staking`
 ## Reasons for choosing the data structures for different usecases
 
@@ -11,7 +11,7 @@
 - `userToTokenAmount` in `Stake.sol`: used it for storing address to token mapping
 - `withdrawRequested` in `Stake.sol`: this is used for storing address to bool mapping to check if the user has already requested for withdrawal or not
 - `flaggedSuspicious` in `Stake.sol`: this is used for storing address to bool mapping to check if the user has been flagged as suspicious or not by the owners(multisig)
-- `signaturesCollected` in `Stake.sol`: 3-level nested mapping `address => bool => address => bool` — first key is the user being flagged/unflagged, second key is the action (true = flag, false = unflag), third key is the owner who signed. this makes sure each owner can only sign once per action per user, and flag and unflag are tracked independently so old flag signatures dont bleed into unflag votes
+- `signaturesCollected` in `Stake.sol`: 3-level nested mapping `address => bool => address => bool` , first key is the user being flagged/unflagged, second key is the action (true = flag, false = unflag), third key is the owner who signed. this makes sure each owner can only sign once per action per user, and flag and unflag are tracked independently so old flag signatures dont bleed into unflag votes
 
 ---
 
@@ -28,7 +28,7 @@ modifier nonReentrancyGuard() {
 }
 ```
 
-but more importantly every function that touches user balances follows the **CEI pattern (Checks-Effects-Interactions)** — meaning all state changes happen before any external call (ETH transfer or ERC-20 transfer). so even if the lock somehow got bypassed, a re-entrant call would see the already-updated balance and revert on the `InsufficientBalance` check. two layers of protection.
+but more importantly every function that touches user balances follows the **CEI pattern (Checks-Effects-Interactions)** , meaning all state changes happen before any external call (ETH transfer or ERC-20 transfer). so even if the lock somehow got bypassed, a re-entrant call would see the already-updated balance and revert on the `InsufficientBalance` check. two layers of protection.
 
 the `onTransferReceived` callback (ERC-1363 entry point) also has the `nonReentrancyGuard` on it so a malicious token contract cant re-enter through the callback.
 
@@ -40,7 +40,7 @@ the reward formula is simple: `reward = stakedAmount * rate / 100`
 
 solidity 0.8+ handles overflow automatically but the task asked for explicit Yul to handle it. the assembly block:
 1. multiplies `amount * rate`
-2. checks if `(product / rate) != amount` — if true, overflow happened → `revert(0, 0)`
+2. checks if `(product / rate) != amount` , if true, overflow happened -> `revert(0, 0)`
 3. divides by 100
 
 the `revert(0, 0)` emits zero return data (no custom error selector), which is why the overflow test uses bare `vm.expectRevert()` instead of a typed selector.
@@ -48,8 +48,13 @@ the `revert(0, 0)` emits zero return data (no custom error selector), which is w
 ---
 
 ## Gas report
+### WITHOUT YUL
+<img width="706" height="716" alt="image" src="https://github.com/user-attachments/assets/6935741a-f68f-4b5c-9a3a-1901c74bc718" />
 
-ran `forge test --gas-report` twice — once with Yul, once with plain Solidity `(amount * rate) / 100` — to see the actual difference:
+### WITH YUL
+<img width="701" height="705" alt="image" src="https://github.com/user-attachments/assets/a293a5b4-bacf-48ea-8d62-99d622b72c13" />
+
+ran `forge test --gas-report` twice , once with Yul, once with plain Solidity `(amount * rate) / 100` , to see the actual difference:
 
 | | Yul | plain Solidity |
 |---|---|---|
@@ -69,7 +74,7 @@ so the Yul version is currently commented out in `Stake.sol` to keep the code re
 
 ## ERC-1363
 
-normally staking an ERC-20 requires two transactions: `approve` and then `stakeToken`. ERC-1363 adds a `transferAndCall` method to the token itself — when called, it transfers tokens AND immediately calls `onTransferReceived` on the receiving contract, all in one transaction.
+normally staking an ERC-20 requires two transactions: `approve` and then `stakeToken`. ERC-1363 adds a `transferAndCall` method to the token itself , when called, it transfers tokens AND immediately calls `onTransferReceived` on the receiving contract, all in one transaction.
 
 `LPToken` inherits from OpenZeppelin's `ERC1363` to get this for free. `Stake` implements `IERC1363Receiver` and handles the callback.
 
