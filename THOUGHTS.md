@@ -47,6 +47,26 @@ the `revert(0, 0)` emits zero return data (no custom error selector), which is w
 
 ---
 
+## Gas report
+
+ran `forge test --gas-report` twice — once with Yul, once with plain Solidity `(amount * rate) / 100` — to see the actual difference:
+
+| | Yul | plain Solidity |
+|---|---|---|
+| `Stake` deployment cost | **2,477,285** | 2,510,475 |
+| `Stake` deployment size | **12,817 bytes** | 12,972 bytes |
+| `withdrawToken` avg gas | **51,813** | 78,679 |
+| `withdrawToken` median gas | **51,113** | 75,958 |
+| `withdrawToken` max gas | **101,086** | 111,054 |
+
+Yul wins on every metric. the reason:
+- plain Solidity 0.8+ wraps every multiply/divide in checked arithmetic... it adds extra opcodes under the hood to detect overflow and revert. that overhead shows up both at deployment (larger bytecode) and at runtime (~27k more gas per `withdrawToken` call on average)
+- the Yul block does the overflow check manually with a single `div`+comparison, which is cheaper than what the Solidity compiler generates
+
+so the Yul version is currently commented out in `Stake.sol` to keep the code readable, but the numbers above justify using it in production.
+
+---
+
 ## ERC-1363
 
 normally staking an ERC-20 requires two transactions: `approve` and then `stakeToken`. ERC-1363 adds a `transferAndCall` method to the token itself — when called, it transfers tokens AND immediately calls `onTransferReceived` on the receiving contract, all in one transaction.
