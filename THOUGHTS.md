@@ -1,6 +1,5 @@
 # THOUGHTS.md , Sentinel Staking
 ### `NOTE: I have allowed both native ETH and an ERC20 (LPToken) for staking`
-## Reasons for choosing the data structures for different usecases
 
 ## test coverage
 <img width="909" height="326" alt="image" src="https://github.com/user-attachments/assets/35c31657-3203-4721-85ca-3b47d5ebc872" />
@@ -31,6 +30,7 @@ so the Yul version is currently commented out in `Stake.sol` to keep the code re
 
 ---
 
+## Reasons for choosing the data structures for different usecases
 
 ### Arrays used for 
 - `i_owners` in `Stake.sol`: to store owners addresses to pass in constructor while deploying this contract
