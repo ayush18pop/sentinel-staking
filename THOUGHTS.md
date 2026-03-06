@@ -2,6 +2,36 @@
 ### `NOTE: I have allowed both native ETH and an ERC20 (LPToken) for staking`
 ## Reasons for choosing the data structures for different usecases
 
+## test coverage
+<img width="909" height="326" alt="image" src="https://github.com/user-attachments/assets/35c31657-3203-4721-85ca-3b47d5ebc872" />
+
+
+## Gas report
+### WITHOUT YUL
+<img width="706" height="716" alt="image" src="https://github.com/user-attachments/assets/6935741a-f68f-4b5c-9a3a-1901c74bc718" />
+
+### WITH YUL
+<img width="701" height="705" alt="image" src="https://github.com/user-attachments/assets/a293a5b4-bacf-48ea-8d62-99d622b72c13" />
+
+ran `forge test --gas-report` twice , once with Yul, once with plain Solidity `(amount * rate) / 100` , to see the actual difference:
+
+| | Yul | plain Solidity |
+|---|---|---|
+| `Stake` deployment cost | **2,477,285** | 2,510,475 |
+| `Stake` deployment size | **12,817 bytes** | 12,972 bytes |
+| `withdrawToken` avg gas | **51,813** | 78,679 |
+| `withdrawToken` median gas | **51,113** | 75,958 |
+| `withdrawToken` max gas | **101,086** | 111,054 |
+
+Yul wins on every metric. the reason:
+- plain Solidity 0.8+ wraps every multiply/divide in checked arithmetic... it adds extra opcodes under the hood to detect overflow and revert. that overhead shows up both at deployment (larger bytecode) and at runtime (~27k more gas per `withdrawToken` call on average)
+- the Yul block does the overflow check manually with a single `div`+comparison, which is cheaper than what the Solidity compiler generates
+
+so the Yul version is currently commented out in `Stake.sol` to keep the code readable, but the numbers above justify using it in production.
+
+---
+
+
 ### Arrays used for 
 - `i_owners` in `Stake.sol`: to store owners addresses to pass in constructor while deploying this contract
 - `actors` in `StakeInvariantTest.t.sol`: to store addresses of actors for invariant testing
@@ -44,31 +74,6 @@ solidity 0.8+ handles overflow automatically but the task asked for explicit Yul
 3. divides by 100
 
 the `revert(0, 0)` emits zero return data (no custom error selector), which is why the overflow test uses bare `vm.expectRevert()` instead of a typed selector.
-
----
-
-## Gas report
-### WITHOUT YUL
-<img width="706" height="716" alt="image" src="https://github.com/user-attachments/assets/6935741a-f68f-4b5c-9a3a-1901c74bc718" />
-
-### WITH YUL
-<img width="701" height="705" alt="image" src="https://github.com/user-attachments/assets/a293a5b4-bacf-48ea-8d62-99d622b72c13" />
-
-ran `forge test --gas-report` twice , once with Yul, once with plain Solidity `(amount * rate) / 100` , to see the actual difference:
-
-| | Yul | plain Solidity |
-|---|---|---|
-| `Stake` deployment cost | **2,477,285** | 2,510,475 |
-| `Stake` deployment size | **12,817 bytes** | 12,972 bytes |
-| `withdrawToken` avg gas | **51,813** | 78,679 |
-| `withdrawToken` median gas | **51,113** | 75,958 |
-| `withdrawToken` max gas | **101,086** | 111,054 |
-
-Yul wins on every metric. the reason:
-- plain Solidity 0.8+ wraps every multiply/divide in checked arithmetic... it adds extra opcodes under the hood to detect overflow and revert. that overhead shows up both at deployment (larger bytecode) and at runtime (~27k more gas per `withdrawToken` call on average)
-- the Yul block does the overflow check manually with a single `div`+comparison, which is cheaper than what the Solidity compiler generates
-
-so the Yul version is currently commented out in `Stake.sol` to keep the code readable, but the numbers above justify using it in production.
 
 ---
 
