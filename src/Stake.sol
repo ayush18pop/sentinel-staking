@@ -4,6 +4,7 @@ pragma solidity ^0.8.30;
 import {LPToken} from "./ERC20Tokens/LPToken.sol";
 import {nQToken} from "./ERC20Tokens/nQToken.sol";
 import {MockRewardOracle} from "./Oracles/MockRewardOracle.sol";
+import {IERC1363Receiver} from "@openzeppelin/interfaces/IERC1363Receiver.sol";
 // this is a time bound staking contract
 
 // Structure for this contract
@@ -13,7 +14,7 @@ import {MockRewardOracle} from "./Oracles/MockRewardOracle.sol";
 // Modifiers
 // External Functions
 // Internal Functions
-contract Stake {
+contract Stake is IERC1363Receiver {
     LPToken public immutable i_lpToken;
     nQToken public immutable i_nqToken;
     MockRewardOracle public immutable i_rewardOracle;
@@ -88,6 +89,8 @@ contract Stake {
         address[] memory _owners,
         uint256 _signaturesRequired
     ) {
+        require(_owners.length > 0, "No owners provided");
+        require(_signaturesRequired > 0 && _signaturesRequired <= _owners.length, "Invalid signaturesRequired");
         i_lpToken = LPToken(_LPToken);
         i_nqToken = nQToken(_nQToken);
         i_rewardOracle = MockRewardOracle(_rewardOracle);
@@ -150,7 +153,7 @@ contract Stake {
     }
 
     /// @notice Withdraw staked LPToken after cooldown has passed.
-    function withdrawToken(uint256 amount) external nonReentrancyGuard requiredNotSuspicious{
+    function withdrawToken(uint256 amount) external nonReentrancyGuard requiredNotSuspicious {
         if (withdrawRequested[msg.sender] == 0) revert WithdrawalRequestNotFound();
         if (block.timestamp - withdrawRequested[msg.sender] < 2 days) revert StakeStillLocked();
         if (userToTokenAmount[msg.sender] < amount) revert InsufficientBalance();
@@ -161,7 +164,19 @@ contract Stake {
             withdrawRequested[msg.sender] = 0;
         }
 
-        uint256 rewardAmount = amount * i_rewardOracle.getRewardRate() / 100;
+        // Fetch rate in Solidity (external calls not possible inside assembly)
+        uint256 rate = i_rewardOracle.getRewardRate();
+
+        // Overflow-safe multiply then divide via Yul
+        uint256 rewardAmount;
+        assembly {
+            // Overflow check: if rate > 0 and (amount * rate) / rate != amount, overflow occurred
+            let product := mul(amount, rate)
+            if and(gt(rate, 0), iszero(eq(div(product, rate), amount))) {
+                revert(0, 0)
+            }
+            rewardAmount := div(product, 100)
+        }
 
         bool ok = i_lpToken.transfer(msg.sender, amount);
         if (!ok) revert TransferFailed();
@@ -171,10 +186,30 @@ contract Stake {
         emit tokenWithdrawnEvent(msg.sender, amount, rewardAmount);
     }
 
+    /// @notice ERC-1363 callback — called by LPToken when transferAndCall is used.
+    ///         Allows staking in a single transaction without a prior approve().
+    function onTransferReceived(
+        address, /*operator*/
+        address from,
+        uint256 value,
+        bytes calldata /*data*/
+    ) external nonReentrancyGuard returns (bytes4) {
+        require(msg.sender == address(i_lpToken), "Stake: unknown token");
+        if (value == 0) revert AmountMustBeGreaterThanZero();
+        if (userToTokenAmount[from] != 0) revert AlreadyStaked();
+
+        userToTokenAmount[from] += value;
+        emit tokenStakedEvent(from, value);
+
+        return IERC1363Receiver.onTransferReceived.selector;
+    }
+
     function flagSuspiciousActivity(address _user) external requiredMultisig {
         bool reached = _collectSignature(_user, true);
         if (!reached) return;
         flaggedSuspicious[_user] = true;
+        // Reset cooldown so user must wait another 2 days after being unflagged
+        withdrawRequested[_user] = 0;
         emit flaggedSuspiciousEvent(_user, msg.sender);
     }
 
