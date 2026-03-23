@@ -97,10 +97,9 @@ contract Stake is IERC1363Receiver {
         address _nQToken,
         address _rewardOracle,
         address[] memory _owners,
-        uint256 _signaturesRequired
+        uint256 _signaturesRequired 
     ) {
-        require(_owners.length > 0, "No owners provided");
-        require(_signaturesRequired > 0 && _signaturesRequired <= _owners.length, "Invalid signaturesRequired");
+        _validateOwners(_owners, _signaturesRequired);
         i_lpToken = LPToken(_LPToken);
         i_nqToken = nQToken(_nQToken);
         i_rewardOracle = IRewardOracle(_rewardOracle);
@@ -176,6 +175,7 @@ contract Stake is IERC1363Receiver {
         if (withdrawRequested[msg.sender] == 0) {
             revert WithdrawalRequestNotFound();
         }
+
         if (block.timestamp - withdrawRequested[msg.sender] < 2 days) revert StakeStillLocked();
         if (userToTokenAmount[msg.sender] < amount) revert InsufficientBalance();
 
@@ -208,6 +208,7 @@ contract Stake is IERC1363Receiver {
         if (!ok) {
             revert TransferFailed();
         }
+
         bool ok2 = i_nqToken.transfer(msg.sender, rewardAmount);
         if (!ok2) {
             revert TransferFailed();
@@ -228,6 +229,7 @@ contract Stake is IERC1363Receiver {
         if (value == 0) {
             revert AmountMustBeGreaterThanZero();
         }
+
         if (userToTokenAmount[from] != 0) {
             revert AlreadyStaked();
         }
@@ -275,6 +277,16 @@ contract Stake is IERC1363Receiver {
         }
     }
 
+    function _validateOwners(address[] memory owners, uint256 _signaturesRequired) internal pure {
+        if (owners.length == 0) {
+            revert("No owners provided");
+        }
+
+        if (_signaturesRequired == 0 || _signaturesRequired > owners.length) {
+            revert("Invalid signaturesRequired");
+        }
+
+    }
 
     /// @dev Collect one owner's signature for a multisig action.
     ///      Returns true when any M-of-N owners (not just the first M) have signed.

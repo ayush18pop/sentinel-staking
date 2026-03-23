@@ -1,4 +1,4 @@
-# THOUGHTS.md , Sentinel Staking
+# THOUGHTS.md — Sentinel Staking
 
 ### `NOTE: I have allowed both native ETH and an ERC20 (LPToken) for staking`
 
