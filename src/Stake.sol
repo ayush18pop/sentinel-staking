@@ -3,7 +3,7 @@ pragma solidity ^0.8.30;
 
 import {LPToken} from "./ERC20Tokens/LPToken.sol";
 import {nQToken} from "./ERC20Tokens/nQToken.sol";
-import {MockRewardOracle} from "./Oracles/MockRewardOracle.sol";
+import {IRewardOracle} from "./Oracles/IRewardOracle.sol";
 import {IERC1363Receiver} from "@openzeppelin/interfaces/IERC1363Receiver.sol";
 // this is a time bound staking contract
 
@@ -17,7 +17,7 @@ import {IERC1363Receiver} from "@openzeppelin/interfaces/IERC1363Receiver.sol";
 contract Stake is IERC1363Receiver {
     LPToken public immutable i_lpToken;
     nQToken public immutable i_nqToken;
-    MockRewardOracle public immutable i_rewardOracle;
+    IRewardOracle public immutable i_rewardOracle;
 
     //Security multisig addresses - dynamic sized array
     address[] public i_owners;
@@ -34,6 +34,16 @@ contract Stake is IERC1363Receiver {
 
     // action: true = flag, false = unflag
     mapping(address => mapping(bool => mapping(address => bool))) public signaturesCollected;
+
+    // --- Cumulative reward accumulator ---
+    // Tracks sum of (rate * deltaBlocks) since contract deployment.
+    // Updated on every state-changing call so the integral is always current.
+    uint256 public globalRewardIndex;
+    uint256 public lastUpdateBlock;
+
+    // Per-user snapshot of globalRewardIndex taken when they staked tokens.
+    // Reward owed = userToTokenAmount[u] * (globalRewardIndex - userRewardIndex[u]) / 100
+    mapping(address => uint256) public userRewardIndex;
 
     bool private _locked;
 
@@ -93,9 +103,10 @@ contract Stake is IERC1363Receiver {
         require(_signaturesRequired > 0 && _signaturesRequired <= _owners.length, "Invalid signaturesRequired");
         i_lpToken = LPToken(_LPToken);
         i_nqToken = nQToken(_nQToken);
-        i_rewardOracle = MockRewardOracle(_rewardOracle);
+        i_rewardOracle = IRewardOracle(_rewardOracle);
         i_owners = _owners;
         signaturesRequired = _signaturesRequired;
+        lastUpdateBlock = block.number;
     }
 
     /////////////////////////////////////////////
@@ -116,11 +127,16 @@ contract Stake is IERC1363Receiver {
         if (amount == 0) revert AmountMustBeGreaterThanZero();
         if (userToTokenAmount[msg.sender] != 0) revert AlreadyStaked();
 
+        _updateGlobalIndex();
+
         // Pull tokens from caller — requires prior approve()
         bool ok = i_lpToken.transferFrom(msg.sender, address(this), amount);
-        if (!ok) revert TransferFailed();
+        if (!ok) {
+            revert TransferFailed();
+        }
 
         userToTokenAmount[msg.sender] += amount;
+        userRewardIndex[msg.sender] = globalRewardIndex;
         emit tokenStakedEvent(msg.sender, amount);
     }
 
@@ -147,41 +163,55 @@ contract Stake is IERC1363Receiver {
         }
 
         (bool success, ) = payable(msg.sender).call{value: amount}("");
-        if (!success) revert TransferFailed();
+        if (!success) {
+            revert TransferFailed();
+        }
 
         emit ethWithdrawnEvent(msg.sender, amount, 0);
     }
 
     /// @notice Withdraw staked LPToken after cooldown has passed.
+    /// Reward = stakedAmount * sum(rate[b] for b in [stakeBlock, withdrawBlock]) / 100
     function withdrawToken(uint256 amount) external nonReentrancyGuard requiredNotSuspicious {
-        if (withdrawRequested[msg.sender] == 0) revert WithdrawalRequestNotFound();
+        if (withdrawRequested[msg.sender] == 0) {
+            revert WithdrawalRequestNotFound();
+        }
         if (block.timestamp - withdrawRequested[msg.sender] < 2 days) revert StakeStillLocked();
         if (userToTokenAmount[msg.sender] < amount) revert InsufficientBalance();
+
+        _updateGlobalIndex();
+
+        // Cumulative rate delta accumulated since user staked
+        uint256 delta = globalRewardIndex - userRewardIndex[msg.sender];
 
         // Effects before Interactions (CEI pattern)
         userToTokenAmount[msg.sender] -= amount;
         if (userToEthAmount[msg.sender] == 0 && userToTokenAmount[msg.sender] == 0) {
             withdrawRequested[msg.sender] = 0;
         }
-
-        // Fetch rate in Solidity (external calls not possible inside assembly)
-        uint256 rate = i_rewardOracle.getRewardRate();
+        // Carry forward the snapshot so partial withdrawals don't double-count
+        userRewardIndex[msg.sender] = globalRewardIndex;
 
         // Overflow-safe multiply then divide via Yul
+        // reward = amount * delta / 100
         uint256 rewardAmount;
         assembly {
-            // Overflow check: if rate > 0 and (amount * rate) / rate != amount, overflow occurred
-            let product := mul(amount, rate)
-            if and(gt(rate, 0), iszero(eq(div(product, rate), amount))) {
+            // Overflow check: if delta > 0 and (amount * delta) / delta != amount, overflow occurred
+            let product := mul(amount, delta)
+            if and(gt(delta, 0), iszero(eq(div(product, delta), amount))) {
                 revert(0, 0)
             }
             rewardAmount := div(product, 100)
         }
 
         bool ok = i_lpToken.transfer(msg.sender, amount);
-        if (!ok) revert TransferFailed();
+        if (!ok) {
+            revert TransferFailed();
+        }
         bool ok2 = i_nqToken.transfer(msg.sender, rewardAmount);
-        if (!ok2) revert TransferFailed();
+        if (!ok2) {
+            revert TransferFailed();
+        }
 
         emit tokenWithdrawnEvent(msg.sender, amount, rewardAmount);
     }
@@ -195,10 +225,17 @@ contract Stake is IERC1363Receiver {
         bytes calldata /*data*/
     ) external nonReentrancyGuard returns (bytes4) {
         require(msg.sender == address(i_lpToken), "Stake: unknown token");
-        if (value == 0) revert AmountMustBeGreaterThanZero();
-        if (userToTokenAmount[from] != 0) revert AlreadyStaked();
+        if (value == 0) {
+            revert AmountMustBeGreaterThanZero();
+        }
+        if (userToTokenAmount[from] != 0) {
+            revert AlreadyStaked();
+        }
+
+        _updateGlobalIndex();
 
         userToTokenAmount[from] += value;
+        userRewardIndex[from] = globalRewardIndex;
         emit tokenStakedEvent(from, value);
 
         return IERC1363Receiver.onTransferReceived.selector;
@@ -225,15 +262,38 @@ contract Stake is IERC1363Receiver {
     /////// INTERNAL FUNCTIONS////////////////////
     /////////////////////////////////////////
 
+    /// @dev Advance the global reward accumulator to the current block.
+    ///      Uses the oracle's cumulative rate over [lastUpdateBlock, block.number)
+    ///      so that every block's rate is captured, not just the current snapshot.
+    ///      Must be called before any stake/unstake to keep the integral correct.
+    function _updateGlobalIndex() internal {
+        uint256 from = lastUpdateBlock;
+        uint256 to = block.number;
+        if (to > from) {
+            globalRewardIndex += i_rewardOracle.getCumulativeRate(from, to);
+            lastUpdateBlock = to;
+        }
+    }
+
+
+    /// @dev Collect one owner's signature for a multisig action.
+    ///      Returns true when any M-of-N owners (not just the first M) have signed.
     function _collectSignature(address _user, bool action) internal returns (bool) {
         if (signaturesCollected[_user][action][msg.sender]) revert AlreadySigned();
         signaturesCollected[_user][action][msg.sender] = true;
-        for (uint256 i = 0; i < signaturesRequired; i++) {
-            if (!signaturesCollected[_user][action][i_owners[i]]) {
-                return false;
+
+        // Count signatures from any owner in the full owner set
+        uint256 count = 0;
+        for (uint256 i = 0; i < i_owners.length; i++) {
+            if (signaturesCollected[_user][action][i_owners[i]]) {
+                count++;
             }
         }
-        for (uint256 i = 0; i < signaturesRequired; i++) {
+
+        if (count < signaturesRequired) return false;
+
+        // Threshold reached — reset all votes so the action can be re-triggered later
+        for (uint256 i = 0; i < i_owners.length; i++) {
             signaturesCollected[_user][action][i_owners[i]] = false;
         }
         return true;

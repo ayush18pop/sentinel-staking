@@ -75,9 +75,10 @@ contract StakeHandler is Test {
         if (stake.flaggedSuspicious(_currentActor)) return;
         uint256 bal = stake.userToTokenAmount(_currentActor);
         if (bal == 0) return;
-        // avoid overflow in Yul: rate is 1-10, so cap amount
-        uint256 rate = (block.number % 10) + 1;
-        if (bal > type(uint256).max / rate) return;
+        // Avoid overflow in Yul: check amount * delta won't overflow uint256.
+        // delta = globalRewardIndex - userRewardIndex[actor]
+        uint256 delta = stake.globalRewardIndex() - stake.userRewardIndex(_currentActor);
+        if (delta > 0 && bal > type(uint256).max / delta) return;
         amount = uint96(bound(amount, 1, bal > type(uint96).max ? type(uint96).max : bal));
         stake.withdrawToken(amount);
         ghost_totalTokenStaked -= amount;
@@ -85,6 +86,10 @@ contract StakeHandler is Test {
 
     function warpTime(uint32 secs) external {
         skip(bound(secs, 0, 3 days));
+    }
+
+    function rollBlocks(uint16 blocks) external {
+        vm.roll(block.number + bound(blocks, 1, 100));
     }
 }
 
@@ -129,12 +134,14 @@ contract StakeInvariantTest is StdInvariant, Test {
 
         handler = new StakeHandler(stake, lpToken, nqToken, actors);
 
-        bytes4[] memory selectors = new bytes4[](5);
+        bytes4[] memory selectors = new bytes4[](7);
         selectors[0] = StakeHandler.stakeEth.selector;
         selectors[1] = StakeHandler.stakeToken.selector;
         selectors[2] = StakeHandler.requestWithdraw.selector;
         selectors[3] = StakeHandler.withdrawEth.selector;
         selectors[4] = StakeHandler.withdrawToken.selector;
+        selectors[5] = StakeHandler.warpTime.selector;
+        selectors[6] = StakeHandler.rollBlocks.selector;
 
         targetSelector(FuzzSelector({addr: address(handler), selectors: selectors}));
         targetContract(address(handler));
@@ -193,5 +200,17 @@ contract StakeInvariantTest is StdInvariant, Test {
                 assertTrue(hasStake);
             }
         }
+    }
+
+    function test_HandlerWithdrawPaths() public {
+        uint256 actorSeed = 0;
+
+        handler.stakeEth(actorSeed, 1 ether);
+        handler.stakeToken(actorSeed, 100 ether);
+        handler.requestWithdraw(actorSeed);
+        handler.warpTime(3 days);
+        handler.rollBlocks(5);
+        handler.withdrawEth(actorSeed, 0.5 ether);
+        handler.withdrawToken(actorSeed, 50 ether);
     }
 }
