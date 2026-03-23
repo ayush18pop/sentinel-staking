@@ -4,27 +4,27 @@
 
 ## test coverage
 
-<img width="909" height="326" alt="image" src="https://github.com/user-attachments/assets/35c31657-3203-4721-85ca-3b47d5ebc872" />
+<img width="902" height="355" alt="image" src="https://github.com/user-attachments/assets/1fe2156e-e396-46f3-8b4c-92d75c83ff2d" />
 
 ## Gas report
 
 ### WITHOUT YUL
 
-<img width="706" height="716" alt="image" src="https://github.com/user-attachments/assets/6935741a-f68f-4b5c-9a3a-1901c74bc718" />
+<img width="710" height="778" alt="image" src="https://github.com/user-attachments/assets/a946a1b6-bf7c-433a-bd29-bd54ed3d041e" />
 
 ### WITH YUL
 
-<img width="701" height="705" alt="image" src="https://github.com/user-attachments/assets/a293a5b4-bacf-48ea-8d62-99d622b72c13" />
+<img width="706" height="781" alt="image" src="https://github.com/user-attachments/assets/ba900ab5-a47b-40c3-8cc9-16f7cb218e51" />
 
 ran `forge test --gas-report` twice , once with Yul, once with plain Solidity `(amount * rate) / 100` , to see the actual difference:
 
 |                            | Yul              | plain Solidity |
 | -------------------------- | ---------------- | -------------- |
-| `Stake` deployment cost    | **2,477,285**    | 2,510,475      |
-| `Stake` deployment size    | **12,817 bytes** | 12,972 bytes   |
-| `withdrawToken` avg gas    | **51,813**       | 78,679         |
-| `withdrawToken` median gas | **51,113**       | 75,958         |
-| `withdrawToken` max gas    | **101,086**      | 111,054        |
+| `Stake` deployment cost    | **2,648,051**    | 2,681,254      |
+| `Stake` deployment size    | **13,528 bytes** | 13,683 bytes   |
+| `withdrawToken` avg gas    | **127,698**      | 128,829        |
+| `withdrawToken` median gas | 116,233          | **115,990**    |
+| `withdrawToken` max gas    | **546,409**      | 718,186        |
 
 Yul wins on every metric. the reason:
 
@@ -131,13 +131,13 @@ ran `forge test --gas-report` twice — once with Yul, once with plain Solidity 
 
 |                            | Yul              | plain Solidity |
 | -------------------------- | ---------------- | -------------- |
-| `Stake` deployment cost    | **2,477,285**    | 2,510,475      |
-| `Stake` deployment size    | **12,817 bytes** | 12,972 bytes   |
-| `withdrawToken` avg gas    | **51,813**       | 78,679         |
-| `withdrawToken` median gas | **51,113**       | 75,958         |
-| `withdrawToken` max gas    | **101,086**      | 111,054        |
+| `Stake` deployment cost    | **2,648,051**    | 2,681,254      |
+| `Stake` deployment size    | **13,528 bytes** | 13,683 bytes   |
+| `withdrawToken` avg gas    | **127,698**      | 128,829        |
+| `withdrawToken` median gas | 116,233          | **115,990**    |
+| `withdrawToken` max gas    | **546,409**      | 718,186        |
 
-Yul wins on every metric. the reason:
+Yul wins on most metrics (4/5). plain Solidity is slightly better on median `withdrawToken` gas.
 
 - plain Solidity 0.8+ wraps every multiply/divide in checked arithmetic... it adds extra opcodes under the hood to detect overflow and revert. that overhead shows up both at deployment (larger bytecode) and at runtime (~27k more gas per `withdrawToken` call on average)
 - the Yul block does the overflow check manually with a single `div`+comparison, which is cheaper than what the Solidity compiler generates
